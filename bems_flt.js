@@ -1,6 +1,12 @@
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // ++++++++++++++ Fault Monitor +++++++++++++++++++++++++++  
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//  Steve Troxel - July 2022
+//  Reads the error_wd table and inserts faults and alarms
+//  into the flt_buffer table
+
+var timeDiff = 20*1000 // Time Difference Threashold
+
 const db = require('./mysqldb');
 const config = require('./config');
 
@@ -9,25 +15,28 @@ async function process_flts() {
   rows = await db.querys(sql)
   const wdObj = rows[0]
   
+  console.log(wdObj)
+
+  // Set some bits for testing... 
   //wdObj['error_wd2'] = 0x3
   //wdObj['error_wd6'] = 0x3
   //wdObj['error_wd7'] = 0x3
-  //wdObj['error_wd8'] = 0x3
+  //wdObj['error_wd8'] = 16
 
   let bit = []
   for(i=0;i<24;i++) { bit[i]=2**i }
 
   let fltConf = []
-  fltConf[0]  = { msg:'String Voltage High ', flt:0}
-  fltConf[1]  = { msg:'String Voltage High ', flt:1}
-  fltConf[2]  = { msg:'String Voltage Low ' , flt:0}
-  fltConf[3]  = { msg:'String Voltage Low ' , flt:1}
-  fltConf[4]  = { msg:'String Current High ', flt:0}
-  fltConf[5]  = { msg:'String Current High ', flt:1}
-  fltConf[6]  = { msg:'String Temperature High ', flt:0}
-  fltConf[7]  = { msg:'String Temperature High ', flt:1}
-  fltConf[8]  = { msg:'Cell Voltage Low ', flt:0}
-  fltConf[9]  = { msg:'Cell Voltage Low ', flt:1}
+  fltConf[0]  = { msg:'String High Voltage - ', flt:0}
+  fltConf[1]  = { msg:'String High Voltage - ', flt:1}
+  fltConf[2]  = { msg:'String Low Voltage - ' , flt:0}
+  fltConf[3]  = { msg:'String Low Voltage - ' , flt:1}
+  fltConf[4]  = { msg:'String High Current - ', flt:0}
+  fltConf[5]  = { msg:'String High Current - ', flt:1}
+  fltConf[6]  = { msg:'String High Temperature - ', flt:0}
+  fltConf[7]  = { msg:'String High Temperature - ', flt:1}
+  fltConf[8]  = { msg:'Cell Low Voltage - ', flt:0}
+  fltConf[9]  = { msg:'Cell Low Voltage - ', flt:1}
  
   // -------------- String Error Word -------------
   let fltActiveLst = []
@@ -62,7 +71,7 @@ async function process_flts() {
   if ( err_wd & bit[6] ) { fltActiveLst.push( ["Fire Battery 2",1] ) }
 
   // -------------- Temperature Alarms/Faults Word -------------
-  err_wd = wdObj['error_wd7']
+  err_wd = wdObj['error_wd8']
   
   if ( err_wd & bit[0] ) { fltActiveLst.push(["Temperature Machine 1",0]) }
   if ( err_wd & bit[1] ) { fltActiveLst.push(["Temperature Machine 1",1]) }
@@ -78,12 +87,29 @@ async function process_flts() {
   // Bulk Insert note the encapsulating [] array brackets are necessary the docs are wrong.
   // Therefore the arg needs to be an array of an array of arrays - go figure. 
   // The msql IGNORE is important so that if the flt/alm is already inserted it just skips over
-  var query = await db.querys('INSERT IGNORE INTO flt_buffer (msg,flt) VALUES ?', [fltActiveLst])
-  
-  console.log(query)
 
-  id = setTimeout(process_flts,5000)
-  //console.log(id)
+  if ( fltActiveLst.length > 0 ) {
+    var query = await db.querys('INSERT IGNORE INTO flt_buffer (msg,flt) VALUES ?', [fltActiveLst])
+    console.log(query)
+  }
+
+  // Check processes times
+  
+  sql = 'select time from volts order by time desc limit 1;select time from volts_aux order by time desc limit 1;select time from env order by time desc limit 1;'
+  rows = await db.querys(sql)
+
+  rowsLbl = ['volts','volts_aux','env']
+  var now = new Date();
+  for (let t of rows) {
+
+     let diff = now - new Date(t[0].time)
+     if ( diff > timeDiff) {
+       console.log(t,diff/1000)
+     } 
+  } 
+
+  //id = setTimeout(process_flts,5000)
+  
 }
 
 process_flts()

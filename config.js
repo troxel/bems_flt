@@ -1,6 +1,6 @@
 const config = {
   db: {
-    host: "localhost",
+    host: "127.0.0.1",
     user: "webdev",
     password: "webdev1!",
     database: "bems",
