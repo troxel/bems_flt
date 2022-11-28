@@ -5,19 +5,26 @@
 //  Reads the error_wd table and inserts faults and alarms
 //  into the flt_buffer table
 
-var timeDiff = 20*1000 // Time Difference Threashold
+var timeDiff = 20000 // Time Difference Threshold in milliseconds
+
+const _ = require('lodash');
 
 const db = require('./mysqldb');
 const config = require('./config');
+
+var toID
+var fltActiveLstPrev = []
+var testFlg = false
+var cnt = 0
 
 async function process_flts() {
   sql = 'select * from error_wd order by time desc limit 1;'
   rows = await db.querys(sql)
   const wdObj = rows[0]
-  
-  console.log(wdObj)
+ 
+  //console.log(wdObj)
 
-  // Set some bits for testing... 
+  // Set some bits for testing...
   //wdObj['error_wd2'] = 0x3
   //wdObj['error_wd6'] = 0x3
   //wdObj['error_wd7'] = 0x3
@@ -45,7 +52,7 @@ async function process_flts() {
   for ( let wd of ['error_wd1','error_wd2','error_wd3','error_wd4']){
     j = j + 1
     for ( let i in fltConf ) {
-      if ( wdObj[wd] & bit[i]) { 
+      if ( wdObj[wd] & bit[i]) {
         fltActiveLst.push([fltConf[i].msg + `String ${j}`,fltConf[i].flt])
       }
     }
@@ -53,14 +60,14 @@ async function process_flts() {
 
   // -------------- Aux Error Word -------------
   for ( let i in fltConf ) {
-       if ( wdObj['error_wd6'] & bit[i]) { 
+       if ( wdObj['error_wd6'] & bit[i]) {
         fltActiveLst.push([fltConf[i].msg + 'Aux',fltConf[i].flt])
       }
   }
-  
+ 
   // -------------- Smoke/Fire Word -------------
   let err_wd = wdObj['error_wd7']
-  
+ 
   if ( err_wd & bit[0] ) { fltActiveLst.push( ["Smoke Machine",1] ) }
   if ( err_wd & bit[1] ) { fltActiveLst.push( ["Smoke Battery",1] ) }
   if ( err_wd & bit[2] ) { fltActiveLst.push( ["Smoke EE",1] ) }
@@ -72,7 +79,7 @@ async function process_flts() {
 
   // -------------- Temperature Alarms/Faults Word -------------
   err_wd = wdObj['error_wd8']
-  
+ 
   if ( err_wd & bit[0] ) { fltActiveLst.push(["Temperature Machine 1",0]) }
   if ( err_wd & bit[1] ) { fltActiveLst.push(["Temperature Machine 1",1]) }
 
@@ -82,53 +89,36 @@ async function process_flts() {
   if ( err_wd & bit[4] ) { fltActiveLst.push(["Temperature EE",0]) }
   if ( err_wd & bit[6] ) { fltActiveLst.push(["Temperature EE",1]) }
 
-  //console.log(fltActiveLst)
-  
-  // Bulk Insert note the encapsulating [] array brackets are necessary the docs are wrong.
-  // Therefore the arg needs to be an array of an array of arrays - go figure. 
-  // The msql IGNORE is important so that if the flt/alm is already inserted it just skips over
-
-  if ( fltActiveLst.length > 0 ) {
-    var query = await db.querys('INSERT IGNORE INTO flt_buffer (msg,flt) VALUES ?', [fltActiveLst])
-    console.log(query)
-  }
-
-  // Check processes times
-  
+  // Check processes times in order: propulsion, aux, env
   sql = 'select time from volts order by time desc limit 1;select time from volts_aux order by time desc limit 1;select time from env order by time desc limit 1;'
   rows = await db.querys(sql)
 
-  rowsLbl = ['volts','volts_aux','env']
-  var now = new Date();
-  for (let t of rows) {
+  rowsLbl = ["Propulsion ","Aux " ,"Env "]
+  var now = new Date()
+  for (i=0; i<3; i++) {
+    let diff = now - new Date(rows[i][0].time)
+    if ( diff > timeDiff) {
+      fltActiveLst.push([rowsLbl[i] + "Data Not Updating",1])
+    }  
+  }
 
-     let diff = now - new Date(t[0].time)
-     if ( diff > timeDiff) {
-       console.log(t,diff/1000)
-     } 
-  } 
+  // Bulk Insert note the encapsulating [] array brackets are necessary the docs are wrong.
+  // Therefore the arg needs to be an array of an array of arrays - go figure.
+  // The msql IGNORE is important so that if the flt/alm is already inserted it just skips over
+  if ( fltActiveLst.length > 0 ) {
+    var query = await db.querys('INSERT IGNORE INTO flt_buffer (msg,flt) VALUES ?', [fltActiveLst])
+    if ( testFlg ) console.log(query)
+  }
 
-  //id = setTimeout(process_flts,5000)
+  // Check processes times in order: propulsion, aux, env
+  sql = 'select time from volts order by time desc limit 1;select time from volts_aux order by time desc limit 1;select time from env order by time desc limit 1;'
+  rows = await db.querys(sql)
   
+  if ( !(cnt++ % 100) ) { console.log(`bems_flt alive - ${fltActiveLst.length} faults`); cnt=1}
+
+  clearTimeout(toID)
+  toID = setTimeout(process_flts,3000)
+ 
 }
 
 process_flts()
-
-
-/* let bit = []
- */
-/* 
-  if ( DCM_ENV_buf.env_sensor[MACHINE_SMOKE] > SMOKE_HI ) *err_ptr = *err_ptr | BIT_0;
-  if ( DCM_ENV_buf.env_sensor[BATT_SMOKE] > SMOKE_HI )    *err_ptr = *err_ptr | BIT_1;
-  if ( DCM_ENV_buf.env_sensor[EE_SMOKE] > SMOKE_HI )      *err_ptr = *err_ptr | BIT_2;
-
-  if ( DCM_ENV_buf.env_sensor[MACHINE_FIRE] > FIRE_HI )   *err_ptr = *err_ptr | BIT_3;
-  if ( DCM_ENV_buf.env_sensor[EE_FIRE] > FIRE_HI )        *err_ptr = *err_ptr | BIT_4;
-  if ( DCM_ENV_buf.env_sensor[BATT_FIRE_1] > FIRE_HI )    *err_ptr = *err_ptr | BIT_5;
-  if ( DCM_ENV_buf.env_sensor[BATT_FIRE_2] > FIRE_HI )    *err_ptr = *err_ptr | BIT_6;
- */
-  // See DDT 49 - Remove H2 Sensors from EE and Machine Spaces
-  //if ( DCM_ENV_buf.env_sensor[MACHINE_H2] > H2_HI )       *err_ptr = *err_ptr | BIT_7;
-  //if ( DCM_ENV_buf.env_sensor[EE_H2] > H2_HI )            *err_ptr = *err_ptr | BIT_8;
-  // Note: Batt H2 has 2 sensors, both set single alarm bit per ICD.
- 
